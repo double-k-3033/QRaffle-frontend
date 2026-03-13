@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Raffle Participants Query</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
+        .input { margin: 20px 0; }
+        input, button { padding: 8px; margin: 5px; }
+        .result { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Test Raffle Participants Query</h1>
+    
+    <div class="input">
+        <label>Input Type: <input type="number" id="inputType" value="10" /></label><br>
+        <label>Epoch: <input type="number" id="epoch" value="203" /></label><br>
+        <label>Token Raffle Index (optional): <input type="number" id="tokenIndex" value="" placeholder="Leave empty for QUBIC raffle" /></label><br>
+        <button onclick="testQuery()">Test Query</button>
+    </div>
+
+    <div id="output" class="result"></div>
+
+    <script type="module">
+        const RPC_URL = 'https://rpc.qubic.org';
+        const SC_INDEX = 19;
+
+        function base64ToUint8Array(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        function uint8ArrayToBase64(bytes) {
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        async function fetchQuerySC(params) {
+            const response = await fetch(`${RPC_URL}/v1/querySmartContract`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            });
+            return await response.json();
+        }
+
+        window.testQuery = async function() {
+            const output = document.getElementById('output');
+            const inputType = parseInt(document.getElementById('inputType').value);
+            const epoch = parseInt(document.getElementById('epoch').value);
+            const tokenIndex = document.getElementById('tokenIndex').value;
+
+            output.innerHTML = '<p>Querying...</p>';
+
+            try {
+                // Create input data (epoch as uint32)
+                const view = new DataView(new ArrayBuffer(4));
+                view.setUint32(0, epoch, true);
+
+                const res = await fetchQuerySC({
+                    contractIndex: SC_INDEX,
+                    inputType: inputType,
+                    inputSize: 4,
+                    requestData: uint8ArrayToBase64(new Uint8Array(view.buffer))
+                });
+
+                let html = '<h2>Query Result</h2>';
+                html += '<pre>' + JSON.stringify(res, null, 2) + '</pre>';
+
+                if (res.responseData) {
+                    const responseBytes = base64ToUint8Array(res.responseData);
+                    html += '<h3>Response Data (Hex)</h3>';
+                    html += '<pre>' + Array.from(responseBytes).map(b => b.toString(16).padStart(2, '0')).join(' ') + '</pre>';
+                    
+                    html += '<h3>Response Data (Bytes)</h3>';
+                    html += '<pre>Length: ' + responseBytes.length + ' bytes</pre>';
+
+                    // Try to parse as participant list (assuming 32-byte IDs)
+                    if (responseBytes.length >= 32 && responseBytes.length % 32 === 0) {
+                        const numParticipants = responseBytes.length / 32;
+                        html += '<h3>Possible Participants (' + numParticipants + ')</h3>';
+                        html += '<ul>';
+                        for (let i = 0; i < numParticipants; i++) {
+                            const start = i * 32;
+                            const idBytes = responseBytes.slice(start, start + 32);
+                            let id = '';
+                            for (let j = 0; j < 32; j++) {
+                                id += String.fromCharCode(idBytes[j]);
+                            }
+                            html += '<li>' + id.replace(/\0/g, '') + '</li>';
+                        }
+                        html += '</ul>';
+                    }
+                }
+
+                output.innerHTML = html;
+            } catch (error) {
+                output.innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error(error);
+            }
+        };
+    </script>
+
+    <div style="margin-top: 40px; padding: 20px; background: #e3f2fd; border-radius: 5px;">
+        <h3>Known Input Types:</h3>
+        <ul>
+            <li><strong>1:</strong> Unknown (8 bytes input)</li>
+            <li><strong>2:</strong> Get Analytics (no input)</li>
+            <li><strong>3:</strong> Get Active Proposal (4 bytes - proposal index)</li>
+            <li><strong>4:</strong> Get Ended Token Raffle (4 bytes - raffle index)</li>
+            <li><strong>5:</strong> Get Ended Qu Raffle (4 bytes - epoch)</li>
+            <li><strong>6:</strong> Get Active Token Raffle (4 bytes - raffle index)</li>
+            <li><strong>7:</strong> Get Epoch Raffle Indexes (4 bytes - epoch)</li>
+            <li><strong>8:</strong> Get Qu Raffle Entry Amount Per User (32 bytes - user ID)</li>
+            <li><strong>9:</strong> Get Qu Raffle Entry Average Amount (no input)</li>
+            <li><strong>10+:</strong> Unknown - test to find participants query</li>
+        </ul>
+        <p><strong>Try different input types (10, 11, 12, etc.) to find the participants query!</strong></p>
+    </div>
+</body>
+</html>

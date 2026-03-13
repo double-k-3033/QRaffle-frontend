@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Compare Token Raffles</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
+        .raffle { margin: 20px 0; padding: 15px; border: 2px solid #ddd; border-radius: 5px; }
+        .diff { background: #ffffcc; padding: 2px 5px; }
+    </style>
+</head>
+<body>
+    <h1>Token Raffle Comparison</h1>
+    <div id="output"></div>
+
+    <script type="module">
+        const RPC_URL = 'https://rpc.qubic.org';
+        const SC_INDEX = 19;
+
+        function base64ToUint8Array(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        function uint8ArrayToBase64(bytes) {
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        function assetNameConvert(value) {
+            if (typeof value === 'bigint') {
+                const bytes = new Uint8Array(8);
+                const view = new DataView(bytes.buffer);
+                view.setBigUint64(0, value, true);
+                let name = '';
+                for (let i = 0; i < 7; i++) {
+                    const char = bytes[i];
+                    if (char === 0) break;
+                    name += String.fromCharCode(char);
+                }
+                return name;
+            }
+            return value;
+        }
+
+        async function fetchQuerySC(params) {
+            const response = await fetch(`${RPC_URL}/v1/querySmartContract`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            });
+            return await response.json();
+        }
+
+        function getResponseValues(res) {
+            if (!res || !res.responseData) return null;
+            const responseData = base64ToUint8Array(res.responseData);
+            const view = new DataView(responseData.buffer);
+
+            return {
+                getUint32: (offset) => view.getUint32(offset, true),
+                getUint64: (offset) => view.getBigUint64(offset, true),
+                getID: async (offset) => {
+                    const idBytes = responseData.slice(offset, offset + 32);
+                    let id = '';
+                    for (let i = 0; i < 32; i++) {
+                        id += String.fromCharCode(idBytes[i]);
+                    }
+                    return id.replace(/\0/g, '');
+                }
+            };
+        }
+
+        async function getActiveTokenRaffle(indexOfTokenRaffle) {
+            const view = new DataView(new ArrayBuffer(4));
+            view.setUint32(0, indexOfTokenRaffle, true);
+
+            const res = await fetchQuerySC({
+                contractIndex: SC_INDEX,
+                inputType: 6,
+                inputSize: 4,
+                requestData: uint8ArrayToBase64(new Uint8Array(view.buffer))
+            });
+
+            const values = getResponseValues(res);
+            if (!values) return null;
+
+            return {
+                tokenIssuer: await values.getID(0),
+                tokenName: assetNameConvert(values.getUint64(32)),
+                entryAmount: Number(values.getUint64(40)),
+                numberOfMembers: values.getUint32(48)
+            };
+        }
+
+        async function main() {
+            const output = document.getElementById('output');
+            
+            output.innerHTML = '<p>Querying raffles...</p>';
+
+            try {
+                const statsy = await getActiveTokenRaffle(1);
+                const qxmr = await getActiveTokenRaffle(0);
+
+                let html = '<div class="raffle"><h2>STATSY Raffle (Index 1)</h2><pre>' + 
+                    JSON.stringify(statsy, null, 2) + '</pre></div>';
+                
+                html += '<div class="raffle"><h2>QXMR Raffle (Index 0)</h2><pre>' + 
+                    JSON.stringify(qxmr, null, 2) + '</pre></div>';
+
+                html += '<div class="raffle"><h2>Comparison</h2>';
+                html += '<table border="1" cellpadding="5">';
+                html += '<tr><th>Property</th><th>STATSY</th><th>QXMR</th><th>Match?</th></tr>';
+                
+                const props = ['tokenIssuer', 'tokenName', 'entryAmount', 'numberOfMembers'];
+                props.forEach(prop => {
+                    const match = statsy[prop] === qxmr[prop];
+                    html += `<tr>
+                        <td><strong>${prop}</strong></td>
+                        <td ${!match ? 'class="diff"' : ''}>${statsy[prop]}</td>
+                        <td ${!match ? 'class="diff"' : ''}>${qxmr[prop]}</td>
+                        <td>${match ? '✅' : '❌'}</td>
+                    </tr>`;
+                });
+                
+                html += '</table>';
+                html += '<h3>Key Findings:</h3><ul>';
+                
+                if (statsy.numberOfMembers === 0 && qxmr.numberOfMembers > 0) {
+                    html += '<li><strong>STATSY has 0 members while QXMR has ' + qxmr.numberOfMembers + ' members</strong></li>';
+                }
+                if (statsy.tokenName !== qxmr.tokenName) {
+                    html += '<li>Token names differ: "' + statsy.tokenName + '" vs "' + qxmr.tokenName + '"</li>';
+                }
+                if (statsy.tokenIssuer !== qxmr.tokenIssuer) {
+                    html += '<li>Token issuers differ (expected - different tokens)</li>';
+                }
+                if (statsy.entryAmount !== qxmr.entryAmount) {
+                    html += '<li>Entry amounts differ: ' + statsy.entryAmount.toLocaleString() + ' vs ' + qxmr.entryAmount.toLocaleString() + '</li>';
+                }
+                
+                html += '</ul></div>';
+
+                output.innerHTML = html;
+            } catch (error) {
+                output.innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error(error);
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>

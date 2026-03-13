@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Raffle Participants</title>
+    <style>
+        body { font-family: monospace; padding: 20px; max-width: 1200px; margin: 0 auto; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
+        .input { margin: 20px 0; }
+        input, button { padding: 8px; margin: 5px; }
+        .result { margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #4CAF50; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        .loading { color: #666; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>Raffle Participants Viewer</h1>
+    
+    <div class="input">
+        <h3>QUBIC Raffle (Standard)</h3>
+        <label>Epoch: <input type="number" id="quEpoch" value="203" /></label>
+        <button onclick="loadQuRaffleParticipants()">Load Participants</button>
+    </div>
+
+    <div class="input">
+        <h3>Token Raffle</h3>
+        <label>Epoch: <input type="number" id="tokenEpoch" value="203" /></label>
+        <label>Token Raffle Index: <input type="number" id="tokenIndex" value="0" /></label>
+        <button onclick="loadTokenRaffleParticipants()">Load Participants</button>
+    </div>
+
+    <div id="output" class="result"></div>
+
+    <script type="module">
+        const RPC_URL = 'https://rpc.qubic.org';
+        const SC_INDEX = 19;
+        const DEPOSIT_QU_RAFFLE_INPUT_TYPE = 6;
+        const DEPOSIT_TOKEN_RAFFLE_INPUT_TYPE = 7;
+
+        async function getContractId() {
+            // Simple contract ID generation for SC_INDEX 19
+            return "TAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXRFC";
+        }
+
+        async function fetchEpochTicks(epoch, page, pageSize) {
+            const response = await fetch(`${RPC_URL}/v2/epochs/${epoch}/ticks?page=${page}&pageSize=${pageSize}`);
+            const data = await response.json();
+            return data.data;
+        }
+
+        async function fetchTxHistory(publicId, startTick, endTick) {
+            const response = await fetch(`${RPC_URL}/v2/identities/${publicId}/transfers?startTick=${startTick}&endTick=${endTick}`);
+            const data = await response.json();
+            return data.data;
+        }
+
+        async function getEpochTickRange(epoch) {
+            try {
+                console.log('Fetching epoch ticks for epoch:', epoch);
+                const firstPage = await fetchEpochTicks(epoch, 1, 1);
+                console.log('First page response:', firstPage);
+
+                if (!firstPage.ticks || firstPage.ticks.length === 0) {
+                    console.error('No ticks found in first page');
+                    return null;
+                }
+
+                const totalPages = firstPage.pagination.totalPages;
+                console.log('Total pages:', totalPages);
+
+                const lastPage = await fetchEpochTicks(epoch, totalPages, 1);
+                console.log('Last page response:', lastPage);
+
+                if (!firstPage.ticks?.[0] || !lastPage.ticks?.[0]) {
+                    console.error('Missing tick data');
+                    return null;
+                }
+
+                const range = {
+                    startTick: firstPage.ticks[0].tickNumber,
+                    endTick: lastPage.ticks[0].tickNumber,
+                };
+                console.log('Tick range:', range);
+                return range;
+            } catch (error) {
+                console.error("Error getting epoch tick range:", error);
+                return null;
+            }
+        }
+
+        window.loadQuRaffleParticipants = async function() {
+            const epoch = parseInt(document.getElementById('quEpoch').value);
+            const output = document.getElementById('output');
+            
+            output.innerHTML = '<p class="loading">Loading QUBIC raffle participants for epoch ' + epoch + '...</p>';
+
+            try {
+                const contractId = await getContractId();
+                const tickRange = await getEpochTickRange(epoch);
+
+                if (!tickRange) {
+                    output.innerHTML = '<p style="color: red;">Could not get tick range for epoch ' + epoch + '</p>';
+                    return;
+                }
+
+                output.innerHTML += '<p>Tick range: ' + tickRange.startTick + ' - ' + tickRange.endTick + '</p>';
+                output.innerHTML += '<p class="loading">Fetching transaction history...</p>';
+
+                const history = await fetchTxHistory(contractId, tickRange.startTick, tickRange.endTick);
+                const ticks = history?.transactions || [];
+
+                const participantMap = new Map();
+
+                for (const tick of ticks) {
+                    for (const txWrapper of tick.transactions) {
+                        const tx = txWrapper.transaction;
+                        const moneyFlew = txWrapper.moneyFlew;
+
+                        if (tx.inputType === DEPOSIT_QU_RAFFLE_INPUT_TYPE && moneyFlew) {
+                            const sourceId = tx.sourceId;
+                            participantMap.set(sourceId, (participantMap.get(sourceId) || 0) + 1);
+                        }
+                    }
+                }
+
+                const participants = Array.from(participantMap.entries())
+                    .map(([wallet, entryCount]) => ({ wallet, entryCount }))
+                    .sort((a, b) => b.entryCount - a.entryCount);
+
+                displayParticipants(participants, 'QUBIC Raffle - Epoch ' + epoch);
+            } catch (error) {
+                output.innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error(error);
+            }
+        };
+
+        window.loadTokenRaffleParticipants = async function() {
+            const epoch = parseInt(document.getElementById('tokenEpoch').value);
+            const tokenRaffleIndex = parseInt(document.getElementById('tokenIndex').value);
+            const output = document.getElementById('output');
+            
+            output.innerHTML = '<p class="loading">Loading token raffle participants for epoch ' + epoch + ', index ' + tokenRaffleIndex + '...</p>';
+
+            try {
+                const contractId = await getContractId();
+                const tickRange = await getEpochTickRange(epoch);
+
+                if (!tickRange) {
+                    output.innerHTML = '<p style="color: red;">Could not get tick range for epoch ' + epoch + '</p>';
+                    return;
+                }
+
+                output.innerHTML += '<p>Tick range: ' + tickRange.startTick + ' - ' + tickRange.endTick + '</p>';
+                output.innerHTML += '<p class="loading">Fetching transaction history...</p>';
+
+                const history = await fetchTxHistory(contractId, tickRange.startTick, tickRange.endTick);
+                const ticks = history?.transactions || [];
+
+                const participantMap = new Map();
+
+                for (const tick of ticks) {
+                    for (const txWrapper of tick.transactions) {
+                        const tx = txWrapper.transaction;
+                        const moneyFlew = txWrapper.moneyFlew;
+
+                        if (tx.inputType === DEPOSIT_TOKEN_RAFFLE_INPUT_TYPE && moneyFlew) {
+                            try {
+                                const inputData = atob(tx.inputHex || "");
+                                const view = new DataView(new Uint8Array([...inputData].map(c => c.charCodeAt(0))).buffer);
+                                const txRaffleIndex = view.getUint32(0, true);
+
+                                if (txRaffleIndex === tokenRaffleIndex) {
+                                    const sourceId = tx.sourceId;
+                                    participantMap.set(sourceId, (participantMap.get(sourceId) || 0) + 1);
+                                }
+                            } catch (parseError) {
+                                console.error("Error parsing token raffle index:", parseError);
+                            }
+                        }
+                    }
+                }
+
+                const participants = Array.from(participantMap.entries())
+                    .map(([wallet, entryCount]) => ({ wallet, entryCount }))
+                    .sort((a, b) => b.entryCount - a.entryCount);
+
+                displayParticipants(participants, 'Token Raffle - Epoch ' + epoch + ', Index ' + tokenRaffleIndex);
+            } catch (error) {
+                output.innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error(error);
+            }
+        };
+
+        function displayParticipants(participants, title) {
+            const output = document.getElementById('output');
+            const totalEntries = participants.reduce((sum, p) => sum + p.entryCount, 0);
+
+            let html = '<h2>' + title + '</h2>';
+            html += '<p><strong>Total Participants:</strong> ' + participants.length + '</p>';
+            html += '<p><strong>Total Entries:</strong> ' + totalEntries + '</p>';
+
+            if (participants.length === 0) {
+                html += '<p>No participants found.</p>';
+            } else {
+                html += '<table>';
+                html += '<tr><th>#</th><th>Wallet</th><th>Entries</th><th>% of Total</th></tr>';
+                participants.forEach((p, index) => {
+                    const percentage = ((p.entryCount / totalEntries) * 100).toFixed(2);
+                    html += '<tr>';
+                    html += '<td>' + (index + 1) + '</td>';
+                    html += '<td style="font-family: monospace;">' + p.wallet + '</td>';
+                    html += '<td>' + p.entryCount + '</td>';
+                    html += '<td>' + percentage + '%</td>';
+                    html += '</tr>';
+                });
+                html += '</table>';
+            }
+
+            output.innerHTML = html;
+        }
+    </script>
+
+    <div style="margin-top: 40px; padding: 20px; background: #e3f2fd; border-radius: 5px;">
+        <h3>How to Use:</h3>
+        <ol>
+            <li><strong>QUBIC Raffle:</strong> Enter an epoch number and click "Load Participants" to see all wallets that participated in the standard QUBIC raffle</li>
+            <li><strong>Token Raffle:</strong> Enter an epoch number and token raffle index (0, 1, 2, etc.) to see participants for a specific token raffle</li>
+            <li>The table shows each participant's wallet address, number of entries, and percentage of total entries</li>
+        </ol>
+        <p><strong>Note:</strong> This queries transaction history from the Qubic network, so it may take a few seconds to load.</p>
+    </div>
+</body>
+</html>

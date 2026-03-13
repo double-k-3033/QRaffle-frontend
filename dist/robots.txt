@@ -1,0 +1,18 @@
+User-agent: *
+Allow: /
+
+# Important pages
+Allow: /raffles
+Allow: /how-it-works
+Allow: /dao
+Allow: /statistics
+
+# Block error pages
+Disallow: /404
+Disallow: /*?error=*
+
+# Sitemap location
+Sitemap: https://qraffle.com/sitemap.xml
+
+# Crawl-delay for respectful crawling
+Crawl-delay: 1

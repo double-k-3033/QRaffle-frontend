@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Transaction History</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; overflow-x: auto; }
+        button { padding: 10px 20px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Debug QRaffle Transaction History</h1>
+    <button onclick="testTxHistory()">Test Transaction History API</button>
+    <div id="output"></div>
+
+    <script>
+        const RPC_URL = 'https://rpc.qubic.org';
+        
+        // Generate contract ID for SC_INDEX 19
+        async function getContractId() {
+            // Contract index 19 = 0x13 in first byte, rest zeros
+            const bytes = new Uint8Array(32);
+            bytes.fill(0);
+            bytes[0] = 19;
+            
+            // Convert to identity string (simplified - just for testing)
+            // The actual contract ID should be fetched from the working code
+            // For now, let's try to fetch it from the RPC
+            const response = await fetch(`${RPC_URL}/v1/status`);
+            const status = await response.json();
+            
+            // Or we can construct it properly
+            // For SC index 19, the identity is all 'a's with specific ending
+            return "TAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXRFC";
+        }
+
+        async function fetchArchiverStatus() {
+            const response = await fetch(`${RPC_URL}/v1/status`);
+            return await response.json();
+        }
+
+        async function fetchTxHistory(publicId, startTick, endTick) {
+            const url = `${RPC_URL}/v2/identities/${publicId}/transfers?startTick=${startTick}&endTick=${endTick}`;
+            console.log('Fetching:', url);
+            const response = await fetch(url);
+            const data = await response.json();
+            return data.data;
+        }
+
+        async function testTxHistory() {
+            const output = document.getElementById('output');
+            output.innerHTML = '<p>Loading...</p>';
+
+            try {
+                // Get contract ID
+                const contractId = await getContractId();
+                output.innerHTML = `<p>Contract ID: ${contractId}</p>`;
+
+                // Get archiver status to find tick range for epoch 201
+                const status = await fetchArchiverStatus();
+                console.log('Archiver status:', status);
+
+                const epoch = 201;
+                const endTick = status.lastProcessedTicksPerEpoch?.[String(epoch)];
+                const prevEndTick = status.lastProcessedTicksPerEpoch?.[String(epoch - 1)];
+                
+                if (!endTick || !prevEndTick) {
+                    output.innerHTML += '<p style="color: red;">Could not find tick range for epoch 201</p>';
+                    output.innerHTML += '<pre>' + JSON.stringify(status.lastProcessedTicksPerEpoch, null, 2) + '</pre>';
+                    return;
+                }
+
+                const startTick = prevEndTick + 1;
+                
+                output.innerHTML += `<h2>Epoch ${epoch}</h2>`;
+                output.innerHTML += `<p>Tick range: ${startTick} - ${endTick}</p>`;
+                output.innerHTML += '<p>Fetching transaction history...</p>';
+
+                // Fetch transaction history for QRaffle contract
+                const history = await fetchTxHistory(contractId, startTick, endTick);
+                
+                output.innerHTML += '<h3>Raw Response:</h3>';
+                if (!history) {
+                    output.innerHTML += '<p style="color: red;">History is null/undefined - API returned no data</p>';
+                    return;
+                }
+                
+                output.innerHTML += '<pre>' + JSON.stringify(history, null, 2).substring(0, 5000) + '...</pre>';
+
+                // Analyze the structure
+                output.innerHTML += '<h3>Analysis:</h3>';
+                output.innerHTML += `<p>Total ticks: ${history?.transactions?.length || 0}</p>`;
+
+                if (history?.transactions?.length > 0) {
+                    const firstTick = history.transactions[0];
+                    output.innerHTML += '<h4>First Tick Structure:</h4>';
+                    output.innerHTML += '<pre>' + JSON.stringify(firstTick, null, 2) + '</pre>';
+
+                    if (firstTick.transactions?.length > 0) {
+                        const firstTx = firstTick.transactions[0];
+                        output.innerHTML += '<h4>First Transaction Wrapper:</h4>';
+                        output.innerHTML += '<pre>' + JSON.stringify(firstTx, null, 2) + '</pre>';
+
+                        // Count deposit transactions
+                        let depositCount = 0;
+                        const participants = new Map();
+
+                        for (const tick of history.transactions) {
+                            for (const txWrapper of tick.transactions || []) {
+                                const tx = txWrapper.transaction;
+                                const moneyFlew = txWrapper.moneyFlew;
+
+                                // inputType 6 = deposit in QUBIC raffle
+                                if (tx?.inputType === 6 && moneyFlew) {
+                                    depositCount++;
+                                    const sourceId = tx.sourceId;
+                                    participants.set(sourceId, (participants.get(sourceId) || 0) + 1);
+                                }
+                            }
+                        }
+
+                        output.innerHTML += `<h3>Deposit Transactions Found:</h3>`;
+                        output.innerHTML += `<p>Total deposits (inputType=6, moneyFlew=true): ${depositCount}</p>`;
+                        output.innerHTML += `<p>Unique participants: ${participants.size}</p>`;
+
+                        if (participants.size > 0) {
+                            output.innerHTML += '<h4>Participants:</h4>';
+                            output.innerHTML += '<ul>';
+                            Array.from(participants.entries())
+                                .sort((a, b) => b[1] - a[1])
+                                .slice(0, 10)
+                                .forEach(([wallet, count]) => {
+                                    output.innerHTML += `<li>${wallet}: ${count} entries</li>`;
+                                });
+                            output.innerHTML += '</ul>';
+                        }
+                    }
+                }
+
+            } catch (error) {
+                output.innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>
