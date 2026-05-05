@@ -9,18 +9,12 @@ import { useQubicConnect } from "@/components/connect/QubicConnectContext";
 import { useTxMonitor } from "@/store/txMonitor";
 import { BalanceChecks } from "@/utils/balanceCheck";
 import { toast } from "sonner";
+import { isRetryableTickError, submitWithFreshTick } from "@/utils/tickRetry";
 
 const useTransferShareManagementRights = () => {
   const [settings] = useAtom(settingsAtom);
   const { wallet, getSignedTx } = useQubicConnect();
   const { startMonitoring } = useTxMonitor();
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-  const isRateLimitError = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    return /rate limit|429|failed to get current tick|tick value is expired|tick value is already in the past|expired|already in the past/i.test(
-      message,
-    );
-  };
 
   const checkTransferShareRights = async (
     assetName: string,
@@ -74,14 +68,14 @@ const useTransferShareManagementRights = () => {
         }
         return;
       }
-      const maxSubmissionAttempts = 4;
       let targetTick = 0;
       let res: Awaited<ReturnType<typeof broadcastTx>> | null = null;
-      for (let attempt = 1; attempt <= maxSubmissionAttempts; attempt++) {
-        try {
-          const tickInfo = await fetchTickInfo();
-          const effectiveTickOffset = Math.max(8, Math.min(settings.tickOffset, 20));
-          targetTick = tickInfo.tick + effectiveTickOffset;
+
+      const submission = await submitWithFreshTick({
+        tickOffset: settings.tickOffset,
+        fetchTickInfo,
+        retryContext: "TransferShareRights",
+        execute: async ({ targetTick: nextTargetTick }) => {
           const transferShareTx = isFromQX
             ? await transferShareManagementRightsFromQX(
                 wallet.publicKey,
@@ -91,7 +85,7 @@ const useTransferShareManagementRights = () => {
                 },
                 requiredTransferAmount,
                 contractIndex,
-                targetTick,
+                nextTargetTick || 0,
               )
             : await transferShareManagementRightsFromQRaffle(
                 wallet.publicKey,
@@ -101,23 +95,17 @@ const useTransferShareManagementRights = () => {
                 },
                 amount,
                 contractIndex,
-                targetTick,
+                nextTargetTick || 0,
               );
+
           const signedTransferShareTx = await getSignedTx(transferShareTx);
-          res = await broadcastTx(signedTransferShareTx.tx);
-          break;
-        } catch (error) {
-          const retryable = isRateLimitError(error);
-          if (!retryable || attempt === maxSubmissionAttempts) {
-            throw error;
-          }
-          const backoffMs = attempt * 1500;
-          console.warn(
-            `[TransferShareRights] retrying fresh tx build/sign/broadcast (attempt ${attempt}/${maxSubmissionAttempts}) in ${backoffMs}ms`,
-          );
-          await sleep(backoffMs);
-        }
-      }
+          return await broadcastTx(signedTransferShareTx.tx);
+        },
+      });
+
+      targetTick = submission.targetTick;
+      res = submission.result;
+
       if (!res || targetTick <= 0) {
         throw new Error("Transfer share rights transaction submission failed");
       }
@@ -151,11 +139,13 @@ const useTransferShareManagementRights = () => {
           targetTick,
           txHash: res.transactionId,
           canRecoverFromMoneyFlewFalse: true,
+          timeoutMs: 45000,
+          fastTrack: true,
         },
         "v2",
       );
     } catch (error) {
-      if (isRateLimitError(error)) {
+      if (isRetryableTickError(error)) {
         toast.error("Transfer failed due to RPC/tick timing. Please wait a few seconds and try again.");
       } else {
         toast.error("Error transferring share rights");

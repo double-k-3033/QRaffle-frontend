@@ -9,19 +9,32 @@ import { toast } from "sonner";
 import { BalanceChecks } from "@/utils/balanceCheck";
 import { addParticipation } from "@/utils/participationStorage";
 import useTransferShareManagementRights from "@/hooks/useTransferShareManagementRight";
+import { isRetryableTickError, submitWithFreshTick } from "@/utils/tickRetry";
+import { TOKEN_RAFFLE_DEPOSIT_FEE, TRANSFER_SHARE_MANAGEMENT_RIGHTS_FEE } from "@/utils/constants";
+
+const GARTH_ASSET_NAME = "GARTH";
+const GARTH_TOKEN_ISSUER = "PHOENIXCLQOBHDZCHJOCKCPZVTKALQBMXYOEDBUHSDCJRMTUCUBPLSUFNBIE";
+const normalizeIdentity = (value: string | null | undefined) => value?.replace(/\0/g, "").trim().toUpperCase() || "";
+const normalizeAssetName = (value: string | null | undefined) => value?.replace(/\0/g, "").trim().toUpperCase() || "";
+
+const getCanonicalTokenIdentity = (tokenName: string | null | undefined, tokenIssuer: string | null | undefined) => {
+  const normalizedTokenName = normalizeAssetName(tokenName);
+  const normalizedTokenIssuer =
+    normalizedTokenName === GARTH_ASSET_NAME ? GARTH_TOKEN_ISSUER : normalizeIdentity(tokenIssuer);
+
+  return {
+    normalizedTokenName,
+    normalizedTokenIssuer,
+  };
+};
+
+const MIN_TOKEN_RAFFLE_DEPOSIT_TICK_OFFSET = 12;
 
 export const useDespositInTokenRaffle = () => {
   const [settings] = useAtom(settingsAtom);
   const { wallet, getSignedTx } = useQubicConnect();
   const { startMonitoring } = useTxMonitor();
   const { handleTransferShareRights } = useTransferShareManagementRights();
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-  const isRateLimitError = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    return /rate limit|429|failed to get current tick|tick value is expired|tick value is already in the past|expired|already in the past/i.test(
-      message,
-    );
-  };
 
   const handleDeposit = async (indexOfTokenRaffles: number) => {
     console.log("=== Token Raffle Deposit Started ===");
@@ -46,18 +59,29 @@ export const useDespositInTokenRaffle = () => {
 
     console.log("Token balance sufficient. needsTransfer:", tokenBalanceCheck.needsTransfer);
 
-    // Only check QUBIC balance for transaction fees if transfer is needed
-    if (tokenBalanceCheck.needsTransfer) {
-      console.log("Transfer needed, checking QUBIC balance for fees...");
-      const quBalanceCheck = await BalanceChecks.forTransferShareRights(wallet.publicKey);
-      console.log("QUBIC balance check result:", quBalanceCheck);
-      
-      if (!quBalanceCheck.hasEnoughBalance) {
-        console.error("Insufficient QUBIC balance for transfer fees");
-        return;
-      }
-    } else {
-      console.log("No transfer needed, skipping QUBIC balance check");
+    const requiredQubicFeeAmount =
+      TOKEN_RAFFLE_DEPOSIT_FEE + (tokenBalanceCheck.needsTransfer ? TRANSFER_SHARE_MANAGEMENT_RIGHTS_FEE : 0);
+
+    console.log("Checking QUBIC balance for raffle tx fees...", {
+      requiredQubicFeeAmount,
+      needsTransfer: tokenBalanceCheck.needsTransfer,
+    });
+
+    const quBalanceCheck = await BalanceChecks.forCustomAmount(
+      wallet.publicKey,
+      requiredQubicFeeAmount,
+      "token raffle tx fee buffer",
+    );
+
+    if (!quBalanceCheck.hasEnoughBalance) {
+      toast.error(
+        `Insufficient QUBIC balance for token raffle fees. Required: ${requiredQubicFeeAmount.toLocaleString()} QUBIC.`,
+      );
+      console.error("Insufficient QUBIC balance for token raffle fees", {
+        requiredQubicFeeAmount,
+        currentBalance: quBalanceCheck.currentBalance,
+      });
+      return;
     }
 
     try {
@@ -112,7 +136,7 @@ export const useDespositInTokenRaffle = () => {
         );
       }
     } catch (error) {
-      if (isRateLimitError(error)) {
+      if (isRetryableTickError(error)) {
         toast.error("Submission failed due to RPC/tick timing. Please wait a few seconds and try again.");
       } else {
         toast.error("Failed to participate in token raffle");
@@ -137,26 +161,38 @@ export const useDespositInTokenRaffle = () => {
     }
 
     try {
-      const maxSubmissionAttempts = 4;
       let targetTick = 0;
       let depositResult: Awaited<ReturnType<typeof broadcastTx>> | null = null;
       let initialMemberCount: number | null = null;
+      let initialBalanceAt19: number | null = null;
+      const { normalizedTokenIssuer, normalizedTokenName } = getCanonicalTokenIdentity(tokenName, tokenIssuer);
       try {
-        const activeTokenRaffle = await getActiveTokenRaffle(indexOfTokenRaffles);
+        const [activeTokenRaffle, ownedAssets] = await Promise.all([
+          getActiveTokenRaffle(indexOfTokenRaffles),
+          fetchAssetsOwnership(wallet.publicKey),
+        ]);
         initialMemberCount = activeTokenRaffle?.numberOfMembers ?? null;
-      } catch (memberCheckError) {
-        console.warn("Failed to fetch initial token raffle member count", memberCheckError);
-      }
-      for (let attempt = 1; attempt <= maxSubmissionAttempts; attempt++) {
-        try {
-          console.log("Fetching tick info...");
-          const tickInfo = await fetchTickInfo();
-          const effectiveTickOffset = Math.max(8, Math.min(settings.tickOffset, 20));
-          targetTick = tickInfo.tick + effectiveTickOffset;
-          console.log("Target tick:", targetTick);
 
+        const baselineAssetAt19 = ownedAssets.find(
+          (asset) =>
+            normalizeIdentity(asset.issuer) === normalizedTokenIssuer &&
+            normalizeAssetName(asset.assetName) === normalizedTokenName &&
+            asset.managingContractIndex === 19,
+        );
+        initialBalanceAt19 = typeof baselineAssetAt19?.amount === "number" ? baselineAssetAt19.amount : 0;
+      } catch (memberCheckError) {
+        console.warn("Failed to fetch initial token raffle checker baseline", memberCheckError);
+      }
+
+      const submission = await submitWithFreshTick({
+        tickOffset: settings.tickOffset,
+        fetchTickInfo,
+        retryContext: "TokenRaffleDeposit",
+        minTickOffset: MIN_TOKEN_RAFFLE_DEPOSIT_TICK_OFFSET,
+        execute: async ({ targetTick: nextTargetTick }) => {
+          console.log("Target tick:", nextTargetTick);
           console.log("Creating deposit transaction...");
-          const depositTx = await depositeInTokenRaffle(wallet.publicKey, indexOfTokenRaffles, targetTick);
+          const depositTx = await depositeInTokenRaffle(wallet.publicKey, indexOfTokenRaffles, nextTargetTick || 0);
           console.log("Deposit tx created:", depositTx);
 
           console.log("Signing transaction...");
@@ -164,20 +200,13 @@ export const useDespositInTokenRaffle = () => {
           console.log("Transaction signed");
 
           console.log("Broadcasting transaction...");
-          depositResult = await broadcastTx(signedDepositTx.tx);
-          break;
-        } catch (error) {
-          const retryable = isRateLimitError(error);
-          if (!retryable || attempt === maxSubmissionAttempts) {
-            throw error;
-          }
-          const backoffMs = attempt * 1500;
-          console.warn(
-            `[TokenRaffleDeposit] retrying fresh tx build/sign/broadcast (attempt ${attempt}/${maxSubmissionAttempts}) in ${backoffMs}ms`,
-          );
-          await sleep(backoffMs);
-        }
-      }
+          return await broadcastTx(signedDepositTx.tx);
+        },
+      });
+
+      targetTick = submission.targetTick;
+      depositResult = submission.result;
+
       if (!depositResult || targetTick <= 0) {
         throw new Error("Token raffle deposit transaction submission failed");
       }
@@ -223,16 +252,20 @@ export const useDespositInTokenRaffle = () => {
             !!activeTokenRaffle &&
             activeTokenRaffle.numberOfMembers > initialMemberCount;
 
-          const balanceAt19 = ownedAssets.find(
+          const matchingAssetAt19 = ownedAssets.find(
             (asset) =>
-              asset.issuer === tokenIssuer &&
-              asset.assetName.toUpperCase() === tokenName.toUpperCase() &&
+              normalizeIdentity(asset.issuer) === normalizedTokenIssuer &&
+              normalizeAssetName(asset.assetName) === normalizedTokenName &&
               asset.managingContractIndex === 19,
-          )?.amount;
+          );
+          const balanceAt19 = typeof matchingAssetAt19?.amount === "number" ? matchingAssetAt19.amount : 0;
 
-          const spentFromIndex19 = typeof balanceAt19 === "number" && balanceAt19 < requiredAmount;
+          const spentFromIndex19ByDelta =
+            typeof initialBalanceAt19 === "number" && initialBalanceAt19 - balanceAt19 >= requiredAmount;
 
-          return membersIncreased || spentFromIndex19;
+          const spentFromIndex19ByThreshold = balanceAt19 < requiredAmount;
+
+          return membersIncreased || spentFromIndex19ByDelta || spentFromIndex19ByThreshold;
         } catch (checkerError) {
           console.warn("Token raffle deposit checker failed", checkerError);
           return false;
@@ -251,6 +284,8 @@ export const useDespositInTokenRaffle = () => {
           targetTick,
           txHash: depositResult.transactionId,
           canRecoverFromMoneyFlewFalse: true,
+          timeoutMs: 45000,
+          fastTrack: true,
           participationMetadata: {
             publicKey: wallet.publicKey,
             participation: {
@@ -264,7 +299,7 @@ export const useDespositInTokenRaffle = () => {
       );
       console.log("Transaction monitoring started with v2 strategy");
     } catch (error) {
-      if (isRateLimitError(error)) {
+      if (isRetryableTickError(error)) {
         toast.error("Deposit failed due to RPC/tick timing. Please wait a few seconds and try again.");
       } else {
         toast.error("Failed to create or broadcast transaction");

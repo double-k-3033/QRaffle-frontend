@@ -51,10 +51,35 @@ export function QubicConnectProvider({ children }: QubicConnectProviderProps) {
 
   const qHelper = new QubicHelper();
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const WALLETCONNECT_SIGN_TIMEOUT_MS = 45000;
+
+  const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      });
+
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  };
+
   const isRateLimitError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     return /rate limit|429|failed to get current tick|tick value is expired|tick value is already in the past|expired|already in the past/i.test(
       message,
+    );
+  };
+
+  const isRetryableWalletConnectSignError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      isRateLimitError(error) || /timed out|timeout|request expired|session expired|session not found|network error/i.test(message)
     );
   };
 
@@ -151,17 +176,21 @@ export function QubicConnectProvider({ children }: QubicConnectProviderProps) {
           const maxSignAttempts = 4;
           for (let attempt = 1; attempt <= maxSignAttempts; attempt++) {
             try {
-              wcResult = await signTransaction({
-                from,
-                to,
-                amount: Number(decodedTx.amount.getNumber()),
-                tick: decodedTx.tick,
-                inputType: decodedTx.inputType,
-                payload: payloadBase64 == "" ? null : payloadBase64,
-              });
+              wcResult = await withTimeout(
+                signTransaction({
+                  from,
+                  to,
+                  amount: Number(decodedTx.amount.getNumber()),
+                  tick: decodedTx.tick,
+                  inputType: decodedTx.inputType,
+                  payload: payloadBase64 == "" ? null : payloadBase64,
+                }),
+                WALLETCONNECT_SIGN_TIMEOUT_MS,
+                "Wallet signing timed out. Open your wallet and approve the request, then try again.",
+              );
               break;
             } catch (error) {
-              const retryable = isRateLimitError(error);
+              const retryable = isRetryableWalletConnectSignError(error);
               if (!retryable || attempt === maxSignAttempts) {
                 throw error;
               }

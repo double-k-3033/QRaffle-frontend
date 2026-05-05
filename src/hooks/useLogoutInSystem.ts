@@ -6,6 +6,7 @@ import { broadcastTx, fetchTickInfo } from "@/services/rpc.service";
 import { useTxMonitor } from "@/store/txMonitor";
 import { toast } from "sonner";
 import { BalanceChecks } from "@/utils/balanceCheck";
+import { isRetryableTickError, submitWithFreshTick } from "@/utils/tickRetry";
 
 export const useLogoutInSystem = () => {
   const [settings] = useAtom(settingsAtom);
@@ -21,13 +22,32 @@ export const useLogoutInSystem = () => {
       return;
     }
 
-    const tickInfo = await fetchTickInfo();
-    const targetTick = tickInfo.tick + settings.tickOffset;
+    let targetTick = 0;
+    let result: Awaited<ReturnType<typeof broadcastTx>>;
 
-    // Standard QUBIC logout
-    const tx = await logoutInSystem(wallet.publicKey, targetTick || 0);
-    const signedTx = await getSignedTx(tx);
-    const result = await broadcastTx(signedTx.tx);
+    try {
+      const submission = await submitWithFreshTick({
+        tickOffset: settings.tickOffset,
+        fetchTickInfo,
+        retryContext: "LogoutInSystem",
+        execute: async ({ targetTick: nextTargetTick }) => {
+          const tx = await logoutInSystem(wallet.publicKey, nextTargetTick || 0);
+          const signedTx = await getSignedTx(tx);
+          return await broadcastTx(signedTx.tx);
+        },
+      });
+
+      targetTick = submission.targetTick;
+      result = submission.result;
+    } catch (error) {
+      if (isRetryableTickError(error)) {
+        toast.error("Logout failed due to RPC/tick timing. Please wait a few seconds and try again.");
+      } else {
+        toast.error("Logout from system failure");
+      }
+      console.error("Error logging out from system:", error);
+      return;
+    }
 
     const taskId = `logout-${wallet.publicKey}-${targetTick}-${Date.now()}`;
 
