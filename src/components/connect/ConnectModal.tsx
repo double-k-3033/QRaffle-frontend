@@ -93,7 +93,19 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    setSelectedFile(file || null);
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".qubic-vault")) {
+      alert("Please select a .qubic-vault file.");
+      event.target.value = "";
+      setSelectedFile(null);
+      return;
+    }
+
+    setSelectedFile(file);
   };
   const handlePasswordChange = (event: React.ChangeEvent<HTMLInputElement>) =>
     setPassword(event.target.value.toString());
@@ -165,11 +177,9 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                           <img src={"/wallet-connect.svg"} alt="Wallet Connect Logo" className="h-8 w-8" />
                           <span className="w-32">Wallet Connect</span>
                         </Button>
-                        {/* <div className="my-2 flex w-full items-center justify-center">
+                        <div className="my-2 flex w-full items-center justify-center">
                           <div className="flex-grow border-t border-gray-300"></div>
-                          <span className="px-4 text-red-500">
-                            <AlertTriangle className="mr-2 inline-block" /> BE CAREFUL!
-                          </span>
+                          <span className="px-4 text-sm text-amber-500">Use with care</span>
                           <div className="flex-grow border-t border-gray-300"></div>
                         </div>
                         <Button variant="default" onClick={() => setSelectedMode("private-seed")}>
@@ -177,7 +187,7 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                         </Button>
                         <Button variant="default" onClick={() => setSelectedMode("vault-file")}>
                           Vault File
-                        </Button> */}
+                        </Button>
                       </>
                     )}
                   </motion.div>
@@ -222,7 +232,7 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                     exit="exit"
                   >
                     Load your Qubic vault file:
-                    <Input type="file" onChange={handleFileChange} />
+                    <Input type="file" accept=".qubic-vault" onChange={handleFileChange} />
                     <Input type="password" placeholder="Enter password" onChange={handlePasswordChange} />
                     <div className="grid grid-cols-2 gap-4">
                       <Button variant="default" onClick={() => setSelectedMode("none")}>
