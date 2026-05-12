@@ -23,6 +23,8 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
   // const [vault] = useState(new QubicVault());
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [password, setPassword] = useState("");
+  const [vaultError, setVaultError] = useState("");
+  const [isUnlockingVault, setIsUnlockingVault] = useState(false);
   // Context connect handling
   const { connect, disconnect, connected, mmSnapConnect, privateKeyConnect, vaultFileConnect } = useQubicConnect();
   // account selection
@@ -185,7 +187,7 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                         <Button variant="default" onClick={() => setSelectedMode("private-seed")}>
                           Private Seed
                         </Button>
-                        <Button variant="default" onClick={() => setSelectedMode("vault-file")}>
+                        <Button variant="default" onClick={() => { setVaultError(""); setSelectedMode("vault-file"); }}>
                           Vault File
                         </Button>
                       </>
@@ -234,23 +236,41 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                     Load your Qubic vault file:
                     <Input type="file" accept=".qubic-vault" onChange={handleFileChange} />
                     <Input type="password" placeholder="Enter password" onChange={handlePasswordChange} />
+                    {vaultError && <p className="text-sm text-red-500">{vaultError}</p>}
                     <div className="grid grid-cols-2 gap-4">
-                      <Button variant="default" onClick={() => setSelectedMode("none")}>
+                      <Button variant="default" onClick={() => { setSelectedMode("none"); setVaultError(""); }}>
                         Cancel
                       </Button>
                       <Button
                         variant="default"
+                        disabled={isUnlockingVault}
                         onClick={async () => {
                           if (!selectedFile) {
-                            alert("Please select a file.");
+                            setVaultError("Please select a .qubic-vault file.");
                             return;
                           }
-                          const vault = await vaultFileConnect(selectedFile, password);
-                          setAccounts(vault.getSeeds());
-                          setSelectedMode("account-select");
+                          if (!password) {
+                            setVaultError("Please enter your password.");
+                            return;
+                          }
+                          setVaultError("");
+                          setIsUnlockingVault(true);
+                          try {
+                            const vault = await vaultFileConnect(selectedFile, password);
+                            setAccounts(vault.getSeeds());
+                            setSelectedMode("account-select");
+                          } catch (error) {
+                            const msg = error instanceof Error ? error.message : String(error);
+                            setVaultError(msg.includes("password") || msg.includes("Import Failed")
+                              ? "Incorrect password or invalid vault file."
+                              : "Failed to unlock vault. Please try again.");
+                            console.error("Error unlocking vault:", error);
+                          } finally {
+                            setIsUnlockingVault(false);
+                          }
                         }}
                       >
-                        Unlock
+                        {isUnlockingVault ? "Unlocking…" : "Unlock"}
                       </Button>
                     </div>
                   </motion.div>

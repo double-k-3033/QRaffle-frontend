@@ -264,36 +264,17 @@ export function QubicConnectProvider({ children }: QubicConnectProviderProps) {
 
   const vaultFileConnect = async (selectedFile: File, password: string): Promise<QubicVault> => {
     if (!selectedFile || !password) {
-      alert("Please select a file and enter a password.");
-      return;
+      throw new Error("Please select a file and enter a password.");
     }
     const vault = new QubicVault();
-
-    const fileReader = new FileReader();
-
-    fileReader.onload = async () => {
-      try {
-        await vault.importAndUnlock(
-          true, // selectedFileIsVaultFile: boolean,
-          password,
-          null, // selectedConfigFile: File | null = null,
-          selectedFile, // File | null = null,
-          true, // unlock: boolean = false
-        );
-        // now we switch view to select one of the seeds
-        return vault;
-      } catch (error) {
-        console.error("Error unlocking vault:", error);
-        alert("Failed to unlock the vault. Please check your password and try again.");
-      }
-    };
-
-    fileReader.onerror = (error) => {
-      console.error("Error reading file:", error);
-      alert("Failed to read the file. Please try again.");
-    };
-
-    fileReader.readAsArrayBuffer(selectedFile);
+    await vault.importAndUnlock(
+      true,  // selectedFileIsVaultFile
+      password,
+      null,  // selectedConfigFile
+      selectedFile,
+      true,  // unlock
+    );
+    return vault;
   };
 
   const contextValue: QubicConnectContextType = {
