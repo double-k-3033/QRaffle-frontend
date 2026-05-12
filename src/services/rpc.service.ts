@@ -46,17 +46,13 @@ const qevent = axios.create({
 });
 
 export const fetchTickInfo = async (): Promise<TickInfo> => {
-  try {
-    const tickResult = await rpc.get("/v1/tick-info");
-    const tick = await tickResult.data;
-    if (!tick || !tick.tickInfo) {
-      console.warn("getTickInfo: Invalid tick");
-      return {} as TickInfo;
-    }
-    return tick.tickInfo;
-  } catch (error) {
-    throw error;
+  const tickResult = await rpc.get("/v1/tick-info");
+  const tick = await tickResult.data;
+  if (!tick || !tick.tickInfo) {
+    console.warn("getTickInfo: Invalid tick");
+    return {} as TickInfo;
   }
+  return tick.tickInfo;
 };
 
 export const fetchBalance = async (publicId: string): Promise<Balance> => {
@@ -176,16 +172,12 @@ export const fetchLatestStats = async (): Promise<LatestStats> => {
 };
 
 export const fetchArchiverStatus = async (): Promise<ArchiverStatus> => {
-  try {
-    const archiverStatusResult = await rpc.get(`${RPC_URL}/v1/status`);
-    if (archiverStatusResult.status !== 200) {
-      console.warn("fetchArchiverStatus: Failed to fetch archiver status");
-      return {} as ArchiverStatus;
-    }
-    return archiverStatusResult.data;
-  } catch (error) {
-    throw error;
+  const archiverStatusResult = await rpc.get(`${RPC_URL}/v1/status`);
+  if (archiverStatusResult.status !== 200) {
+    console.warn("fetchArchiverStatus: Failed to fetch archiver status");
+    return {} as ArchiverStatus;
   }
+  return archiverStatusResult.data;
 };
 
 export const fetchRichList = async (page: number, pageSize: number): Promise<RichList> => {
