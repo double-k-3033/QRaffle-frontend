@@ -72,18 +72,6 @@ export interface RichList {
     entities: { identity: string; balance: string }[];
   };
 }
-
-export interface Transaction {
-  sourceId: string;
-  destId: string;
-  amount: string;
-  tickNumber: number;
-  inputType: number;
-  inputSize: number;
-  inputHex: string;
-  signatureHex: string;
-  txId: string;
-}
 export interface TxHistory {
   transactions: {
     tickNumber: number;

@@ -34,7 +34,15 @@ export const ReconnectButton = (props: any) => {
   );
 };
 
-export const HeaderButtons = ({ state, onConnectClick }: { state: MetamaskState; onConnectClick(): unknown }) => {
+export const HeaderButtons = ({
+  state,
+  appConnected,
+  onConnectClick,
+}: {
+  state: MetamaskState;
+  appConnected: boolean;
+  onConnectClick(): unknown;
+}) => {
   if (!state.snapsDetected && !state.installedSnap) {
     return <InstallButton />;
   }
@@ -45,6 +53,13 @@ export const HeaderButtons = ({ state, onConnectClick }: { state: MetamaskState;
 
   if (shouldDisplayReconnectButton(state.installedSnap)) {
     return <ReconnectButton onClick={onConnectClick} />;
+  }
+
+  // Snap is installed in MetaMask, but the user may have disconnected from
+  // this app. Only show the disabled "Connected" state when the app session
+  // is actually active; otherwise offer a fresh Connect button.
+  if (!appConnected) {
+    return <ConnectButton onClick={onConnectClick} isFlask={state.isFlask} />;
   }
 
   return (

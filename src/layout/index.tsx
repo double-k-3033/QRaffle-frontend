@@ -3,26 +3,25 @@ import { AnimatePresence } from "framer-motion";
 import Header from "./Header";
 import Footer from "./Footer";
 import useDataFetcher from "@/hooks/useDataFetcher";
-import { useContext, useEffect } from "react";
+import { useEffect } from "react";
 import { useQubicConnect } from "@/components/connect/QubicConnectContext";
-import { MetaMaskContext } from "@/components/connect/MetamaskContext";
 import useGlobalTxMonitor from "@/hooks/useGlobalTxMonitor";
-
 const Layout: React.FC = () => {
   useDataFetcher();
   useGlobalTxMonitor();
 
-  const [state] = useContext(MetaMaskContext);
-  const { mmSnapConnect, connect } = useQubicConnect();
+  const { connect } = useQubicConnect();
 
+  // Restore wallet from localStorage exactly once on mount.
+  // We intentionally do NOT auto-connect based on snap state alone —
+  // the user may have explicitly disconnected, and the snap still being
+  // installed in MetaMask must not be treated as a signal to reconnect.
   useEffect(() => {
     const storedWallet = localStorage.getItem("wallet");
     if (storedWallet) {
       connect(JSON.parse(storedWallet));
-    } else if (state.installedSnap) {
-      mmSnapConnect();
     }
-  }, [state]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative flex min-h-screen flex-col">

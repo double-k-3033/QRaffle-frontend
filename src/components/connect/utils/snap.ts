@@ -2,6 +2,10 @@ import type { MetaMaskInpageProvider } from "@metamask/providers";
 
 import { defaultSnapOrigin } from "../config";
 import type { GetSnapsResponse, Snap } from "../types";
+import { getResolvedMetaMaskProvider } from "./metamask";
+
+const getProvider = (override?: MetaMaskInpageProvider): any =>
+  override ?? getResolvedMetaMaskProvider() ?? window.ethereum;
 
 /**
  * Get the installed snaps in MetaMask.
@@ -10,7 +14,7 @@ import type { GetSnapsResponse, Snap } from "../types";
  * @returns The snaps installed in MetaMask.
  */
 export const getSnaps = async (provider?: MetaMaskInpageProvider): Promise<GetSnapsResponse> =>
-  (await (provider ?? window.ethereum).request({
+  (await getProvider(provider).request({
     method: "wallet_getSnaps",
   })) as unknown as GetSnapsResponse;
 
@@ -24,7 +28,7 @@ export const connectSnap = async (
   snapId: string = defaultSnapOrigin,
   params: Record<"version" | string, unknown> = {},
 ) => {
-  await window.ethereum.request({
+  await getProvider().request({
     method: "wallet_requestSnaps",
     params: {
       [snapId]: params,

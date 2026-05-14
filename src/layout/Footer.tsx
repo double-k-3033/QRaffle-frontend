@@ -33,7 +33,7 @@ const Footer: React.FC = () => {
                 <Twitter className="h-5 w-5" />
               </a>
               <a
-                href="https://github.com/serendipity-seeker/qraffle"
+                href="https://github.com/double-k-3033/QRaffle-frontend"
                 target="_blank"
                 rel="noreferrer"
                 className="text-muted-foreground hover:text-foreground transition-colors"

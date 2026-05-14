@@ -1,47 +1,105 @@
 import { getSnaps } from "./snap";
 
+// Module-level reference to the resolved MetaMask provider so all snap
+// calls (wallet_requestSnaps, wallet_invokeSnap, etc.) use the same one.
+let resolvedMetaMaskProvider: any = null;
+
+export const getResolvedMetaMaskProvider = () => resolvedMetaMaskProvider;
+
 /**
- * Tries to detect if one of the injected providers is MetaMask and checks if snaps is available in that MetaMask version.
+ * Discover the MetaMask provider via EIP-6963 (MetaMask v13+).
+ * Dispatches `eip6963:requestProvider` and waits up to `timeoutMs` for
+ * an announcement whose `rdns` is `io.metamask`.
+ */
+const getMetaMaskProviderEIP6963 = (timeoutMs = 500): Promise<any | null> => {
+  return new Promise((resolve) => {
+    const found: any[] = [];
+    const timeoutId = setTimeout(() => {
+      resolve(found[0] ?? null);
+    }, timeoutMs);
+
+    const handler = (event: any) => {
+      const rdns: string = event.detail?.info?.rdns ?? "";
+      if (rdns === "io.metamask" || rdns.startsWith("io.metamask.")) {
+        clearTimeout(timeoutId);
+        window.removeEventListener("eip6963:announceProvider", handler);
+        resolve(event.detail.provider);
+      } else if (event.detail?.provider) {
+        found.push(event.detail.provider);
+      }
+    };
+
+    window.addEventListener("eip6963:announceProvider", handler);
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+  });
+};
+
+/**
+ * Tries to detect MetaMask and checks if the Snaps API is available.
+ * Priority order:
+ *  1. EIP-6963 announcement (MetaMask v13+)
+ *  2. window.ethereum.detected  (legacy multi-wallet)
+ *  3. window.ethereum.providers (legacy multi-wallet)
+ *  4. window.ethereum directly  (single wallet fallback)
  *
- * @returns True if the MetaMask version supports Snaps, false otherwise.
+ * @returns True if a MetaMask provider that supports Snaps was found.
  */
 export const detectSnaps = async () => {
+  // ── 1. EIP-6963 (MetaMask v13+) ───────────────────────────────────────
+  const eip6963Provider = await getMetaMaskProviderEIP6963();
+  if (eip6963Provider) {
+    try {
+      await getSnaps(eip6963Provider);
+      resolvedMetaMaskProvider = eip6963Provider;
+      try {
+        window.ethereum = eip6963Provider;
+      } catch {
+        // window.ethereum may be read-only; ignore
+      }
+      return true;
+    } catch {
+      // snap API not available on this provider
+    }
+  }
+
+  // ── 2. Legacy: window.ethereum.detected ───────────────────────────────
   if (window.ethereum?.detected) {
     for (const provider of window.ethereum.detected) {
       try {
-        // Detect snaps support
         await getSnaps(provider);
-
-        // enforces MetaMask as provider
         if (window.ethereum.setProvider) {
           window.ethereum.setProvider(provider);
         }
-
+        resolvedMetaMaskProvider = provider;
         return true;
       } catch {
-        // no-op
+        // try next
       }
     }
   }
 
+  // ── 3. Legacy: window.ethereum.providers ──────────────────────────────
   if (window.ethereum?.providers) {
     for (const provider of window.ethereum.providers) {
       try {
-        // Detect snaps support
         await getSnaps(provider);
-
-        window.ethereum = provider;
-
+        resolvedMetaMaskProvider = provider;
+        try {
+          window.ethereum = provider;
+        } catch {
+          // read-only; ignore
+        }
         return true;
       } catch {
-        // no-op
+        // try next
       }
     }
   }
 
+  // ── 4. Direct window.ethereum fallback ────────────────────────────────
   try {
     await getSnaps();
-
+    resolvedMetaMaskProvider = window.ethereum;
     return true;
   } catch {
     return false;
@@ -54,7 +112,7 @@ export const detectSnaps = async () => {
  * @returns True if the MetaMask version is Flask, false otherwise.
  */
 export const isFlask = async () => {
-  const provider = window.ethereum;
+  const provider = resolvedMetaMaskProvider ?? window.ethereum;
 
   try {
     const clientVersion = await provider?.request({

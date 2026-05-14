@@ -1,7 +1,8 @@
 import { generateQRCode } from "@/utils";
 import { AnimatePresence, motion } from "framer-motion";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { IoClose } from "react-icons/io5";
+import { LuFileKey } from "react-icons/lu";
 import { Button } from "../ui/button";
 import { Card } from "../ui/card";
 import { Input } from "../ui/input";
@@ -25,6 +26,7 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
   const [password, setPassword] = useState("");
   const [vaultError, setVaultError] = useState("");
   const [isUnlockingVault, setIsUnlockingVault] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Context connect handling
   const { connect, disconnect, connected, mmSnapConnect, privateKeyConnect, vaultFileConnect } = useQubicConnect();
   // account selection
@@ -62,6 +64,20 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
     setQrCode(result);
     await approvalPromise;
   };
+
+  // Reset vault file state whenever the modal closes
+  useEffect(() => {
+    if (!open) {
+      setSelectedFile(null);
+      setPassword("");
+      setVaultError("");
+      setIsUnlockingVault(false);
+      setPrivateSeed("");
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }, [open]);
 
   useEffect(() => {
     if (isConnected) {
@@ -204,7 +220,7 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                     exit="exit"
                   >
                     Your 55 character private key (seed):
-                    <Input type="text" value={privateSeed} onChange={(e) => privateKeyValidate(e.target.value)} />
+                    <Input type="password" value={privateSeed} onChange={(e) => privateKeyValidate(e.target.value)} />
                     {errorMsgPrivateSeed && <p className="text-red-500">{errorMsgPrivateSeed}</p>}
                     <div className="grid grid-cols-2 gap-4">
                       <Button variant="default" onClick={() => setSelectedMode("none")}>
@@ -234,7 +250,39 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                     exit="exit"
                   >
                     Load your Qubic vault file:
-                    <Input type="file" accept=".qubic-vault" onChange={handleFileChange} />
+
+                    {/* Hidden native file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".qubic-vault"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+
+                    {/* File picker row */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex shrink-0 items-center gap-1.5 rounded-md border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-white/20 active:bg-white/25"
+                      >
+                        Choose File
+                      </button>
+
+                      {/* File name display */}
+                      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-white/10 bg-white/5 px-3 py-1.5">
+                        {selectedFile ? (
+                          <>
+                            <LuFileKey className="h-4 w-4 shrink-0 text-teal-400" />
+                            <span className="truncate text-sm text-white/90">{selectedFile.name}</span>
+                          </>
+                        ) : (
+                          <span className="text-sm text-white/30">No file selected</span>
+                        )}
+                      </div>
+                    </div>
+
                     <Input type="password" placeholder="Enter password" onChange={handlePasswordChange} />
                     {vaultError && <p className="text-sm text-red-500">{vaultError}</p>}
                     <div className="grid grid-cols-2 gap-4">
@@ -334,8 +382,9 @@ const ConnectModal = ({ open, onClose, darkMode }: { open: boolean; onClose: () 
                   >
                     Connect your MetaMask wallet. You need to have MetaMask installed and unlocked.
                     <div className="mt-5 flex flex-col gap-2">
-                      <HeaderButtons
+                    <HeaderButtons
                         state={state}
+                        appConnected={connected}
                         onConnectClick={() => {
                           mmSnapConnect();
                           setSelectedMode("none");

@@ -9,6 +9,7 @@ import { base64ToUint8Array, decodeUint8ArrayTx, uint8ArrayToBase64 } from "@/ut
 import { toast } from "sonner";
 import { getSnap } from "./utils/snap";
 import { connectSnap } from "./utils/snap";
+import { getResolvedMetaMaskProvider } from "./utils/metamask";
 // @ts-ignore
 import { QubicVault } from "@qubic-lib/qubic-ts-vault-library";
 import { useAtom } from "jotai";
@@ -101,7 +102,8 @@ export function QubicConnectProvider({ children }: QubicConnectProviderProps) {
   };
 
   const getMetaMaskPublicId = async (accountIdx: number = 0, confirm: boolean = false): Promise<string> => {
-    return await window.ethereum.request({
+    const provider = getResolvedMetaMaskProvider() ?? window.ethereum;
+    return await provider.request({
       method: "wallet_invokeSnap",
       params: {
         snapId: defaultSnapOrigin,
@@ -118,8 +120,9 @@ export function QubicConnectProvider({ children }: QubicConnectProviderProps) {
 
   const getMetaMaskSignedTx = async (tx: Uint8Array, offset: number, accountIdx: number = 0) => {
     const base64Tx = btoa(String.fromCharCode(...Array.from(tx)));
+    const provider = getResolvedMetaMaskProvider() ?? window.ethereum;
 
-    return await window.ethereum.request({
+    return await provider.request({
       method: "wallet_invokeSnap",
       params: {
         snapId: defaultSnapOrigin,
